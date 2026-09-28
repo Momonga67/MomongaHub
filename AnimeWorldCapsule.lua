@@ -1,8 +1,25 @@
---[[========================================================
-    MomongaHub
-    Anime World Capsule
-==========================================================]]
+if getgenv().MomongaHubUnload then
+	pcall(getgenv().MomongaHubUnload)
+	getgenv().MomongaHubUnload = nil
+end
 
+if getgenv().EnemyTPUnload then
+	pcall(getgenv().EnemyTPUnload)
+	getgenv().EnemyTPUnload = nil
+end
+
+local CoreGui = game:GetService("CoreGui")
+
+for _, gui in ipairs(CoreGui:GetChildren()) do
+	if gui.Name == "MomongaHub"
+	or gui.Name == "EnemyTPGUI" then
+		pcall(function()
+			gui:Destroy()
+		end)
+	end
+end
+
+task.wait(0.2)
 if getgenv().EnemyTPUnload then
 	pcall(getgenv().EnemyTPUnload)
 end
