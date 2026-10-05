@@ -406,7 +406,7 @@ function API:Tab(name, description, symbol)
    value=table.find(options,preferred) and preferred or options[1]
    for _,option in ipairs(options) do
     local item=button(list,option,UDim2.new(),UDim2.new(1,-6,0,28),C.AccentDark)
-    item.Activated:Connect(function() if not dead then set(option,true) end end)
+        item.Activated:Connect(function() if not dead then set(option,true) end end)
    end
    expand(false)
   end
@@ -538,8 +538,7 @@ end
 local selectedQuest="\084\111\110\121\032\040\076\086\049\041"
 local autoQuest=false
 local autoLevel=false
-local skippedQuests={}   -- only quests the server refuses this session; completed farming quests remain repeatable
-local questDropdown
+local skippedQuests={}   local questDropdown
 local flightSpeed=70
 local movementMethod="\070\108\121"
 local target, flightRoot, flightHumanoid, attachment, mover
@@ -560,6 +559,9 @@ local questAcceptAttempts=0
 local questLastAccept=-100
 local stopAttack
 local scanElapsed=0
+local questGateElapsed=0
+local questGateInterval=0.20
+local questReadyCache=false
 local home=API:Tab("\065\117\116\111","\067\104\111\111\115\101\032\097\032\113\117\101\115\116\032\097\110\100\032\109\111\118\101\032\116\111\032\105\116\115\032\116\097\114\103\101\116\046","\226\140\130")
 local autoDodgeTab=API:Tab("\065\117\116\111\032\068\111\100\103\101","\065\117\116\111\109\097\116\105\099\097\108\108\121\032\100\111\100\103\101\032\119\104\101\110\032\116\104\101\032\114\101\097\108\032\068\111\100\103\101\032\099\104\097\114\103\101\032\114\101\097\099\104\101\115\032\049\048\048\037\046","\226\151\135")
 local autoStatTab=API:Tab("\065\117\116\111\083\116\097\116","\065\117\116\111\109\097\116\105\099\097\108\108\121\032\115\112\101\110\100\032\115\116\097\116\032\112\111\105\110\116\115\032\097\099\114\111\115\115\032\115\101\108\101\099\116\101\100\032\115\116\097\116\115\046","\226\156\166")
@@ -569,7 +571,7 @@ home:Section("\065\117\116\111\032\081\117\101\115\116")
 questDropdown=home:Dropdown("\083\101\108\101\099\116\032\081\117\101\115\116","\067\104\111\111\115\101\032\097\032\113\117\101\115\116\032\103\105\118\101\114\046\032\065\117\116\111\032\076\101\118\101\108\032\111\118\101\114\114\105\100\101\115\032\116\104\105\115\046",questLabels,"\084\111\110\121\032\040\076\086\049\041",function(value)
  if value==selectedQuest then return end
  selectedQuest=value
- target=nil; questAcceptAttempts=0; questLastAccept=-100
+ target=nil; questReadyCache=false; questGateElapsed=questGateInterval; questAcceptAttempts=0; questLastAccept=-100
  if stopAttack then stopAttack() end
 end)
 home:Dropdown("\084\119\101\101\110\077\101\116\104\111\100","\070\108\121\032\109\111\118\101\115\032\115\109\111\111\116\104\108\121\032\116\104\114\111\117\103\104\032\119\097\108\108\115\046\032\084\101\108\101\112\111\114\116\032\105\110\115\116\097\110\116\108\121\032\109\111\118\101\115\032\098\101\115\105\100\101\032\116\104\101\032\113\117\101\115\116\032\078\080\067\047\101\110\101\109\121\046",{"\070\108\121","\084\101\108\101\112\111\114\116"},"\070\108\121",function(value)
@@ -616,7 +618,7 @@ local function beginWallPass(character)
   end
  end)
  collisionStep=RunService.PreSimulation:Connect(function()
-  for part in pairs(collisionParts) do
+    for part in pairs(collisionParts) do
    if part.Parent and part.CanCollide then part.CanCollide=false end
   end
  end)
@@ -638,22 +640,27 @@ local mapWide={
  range=20000,
  lastStreamRequest=0,
  lastStreamPosition=nil,
- models={},
- spawnMarkers={},
- lastFullScan=0,
- fullScanInterval=3.0
+ byName={},
+ modelKeys=setmetatable({},{__mode="\107"}),
+ spawnByName={},
+ spawnKeys=setmetatable({},{__mode="\107"}),
+ fuzzyCache={},
+ spawnCache={}
 }
 function mapWide.requestStream(position)
  if typeof(position)~="\086\101\099\116\111\114\051" then return end
  local now=os.clock()
- if mapWide.lastStreamPosition and (mapWide.lastStreamPosition-position).Magnitude<150 and now-mapWide.lastStreamRequest<2.5 then
+ if mapWide.lastStreamPosition
+  and (mapWide.lastStreamPosition-position).Magnitude<150
+  and now-mapWide.lastStreamRequest<3
+ then
   return
  end
  mapWide.lastStreamRequest=now
  mapWide.lastStreamPosition=position
  task.spawn(function()
   pcall(function()
-   player:RequestStreamAroundAsync(position,3)
+   player:RequestStreamAroundAsync(position,2)
   end)
  end)
 end
@@ -676,7 +683,6 @@ function mapWide.root(model)
  return model:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116",true)
   or model:FindFirstChild("\085\112\112\101\114\084\111\114\115\111",true)
   or model:FindFirstChild("\084\111\114\115\111",true)
-  or model:FindFirstChild("\072\101\097\100",true)
   or model.PrimaryPart
   or model:FindFirstChildWhichIsA("\066\097\115\101\080\097\114\116",true)
 end
@@ -695,38 +701,145 @@ function mapWide.alive(model)
  end
  return mapWide.root(model)~=nil
 end
+function mapWide.liveRoot(model)
+ if not model or model==player.Character or not model:IsDescendantOf(workspace) then return nil end
+ if not mapWide.alive(model) then return nil end
+ return mapWide.root(model)
+end
+function mapWide.keysFor(object)
+ local keys={}
+ local seen={}
+ local function add(value)
+  local key=mapWide.compact(value)
+  if key~="" and not seen[key] then
+   seen[key]=true
+   table.insert(keys,key)
+  end
+ end
+ add(object.Name)
+ for _,attribute in ipairs({"\078\080\067\078\097\109\101","\077\111\098\078\097\109\101","\068\105\115\112\108\097\121\078\097\109\101","\069\110\101\109\121\078\097\109\101","\078\097\109\101"}) do
+  local value=object:GetAttribute(attribute)
+  if value~=nil then add(value) end
+ end
+ return keys
+end
+function mapWide.bucketAdd(bucket,key,object)
+ local set=bucket[key]
+ if not set then
+  set=setmetatable({},{__mode="\107"})
+  bucket[key]=set
+ end
+ set[object]=true
+end
+function mapWide.bucketRemove(bucket,key,object)
+ local set=bucket[key]
+ if set then
+  set[object]=nil
+  if next(set)==nil then bucket[key]=nil end
+ end
+end
+function mapWide.indexModel(model)
+ if not model:IsA("\077\111\100\101\108") or model==player.Character then return end
+ local keys=mapWide.keysFor(model)
+ mapWide.modelKeys[model]=keys
+ for _,key in ipairs(keys) do
+  mapWide.bucketAdd(mapWide.byName,key,model)
+ end
+ table.clear(mapWide.fuzzyCache)
+end
+function mapWide.unindexModel(model)
+ local keys=mapWide.modelKeys[model]
+ if keys then
+  for _,key in ipairs(keys) do
+   mapWide.bucketRemove(mapWide.byName,key,model)
+  end
+  mapWide.modelKeys[model]=nil
+  table.clear(mapWide.fuzzyCache)
+ end
+end
+function mapWide.isHostileMarker(object)
+ local parent=object.Parent
+ if not parent then return false end
+ if parent.Name=="\104\111\115\116\105\108\101" then return true end
+ return parent.Parent and parent.Parent.Name=="\104\111\115\116\105\108\101"
+end
+function mapWide.indexSpawn(object)
+ if not (object:IsA("\065\116\116\097\099\104\109\101\110\116") or object:IsA("\066\097\115\101\080\097\114\116") or object:IsA("\077\111\100\101\108")) then return end
+ if not mapWide.isHostileMarker(object) then return end
+ local keys=mapWide.keysFor(object)
+ if object.Parent then
+  local parentKey=mapWide.compact(object.Parent.Name)
+  if parentKey~="" and not table.find(keys,parentKey) then table.insert(keys,parentKey) end
+ end
+ mapWide.spawnKeys[object]=keys
+ for _,key in ipairs(keys) do
+  mapWide.bucketAdd(mapWide.spawnByName,key,object)
+ end
+ table.clear(mapWide.spawnCache)
+end
+function mapWide.unindexSpawn(object)
+ local keys=mapWide.spawnKeys[object]
+ if keys then
+  for _,key in ipairs(keys) do
+   mapWide.bucketRemove(mapWide.spawnByName,key,object)
+  end
+  mapWide.spawnKeys[object]=nil
+  table.clear(mapWide.spawnCache)
+ end
+end
+function mapWide.indexObject(object)
+ if object:IsA("\077\111\100\101\108") then
+  mapWide.indexModel(object)
+  mapWide.indexSpawn(object)
+ elseif object:IsA("\065\116\116\097\099\104\109\101\110\116") or object:IsA("\066\097\115\101\080\097\114\116") then
+  mapWide.indexSpawn(object)
+ end
+end
+function mapWide.removeObject(object)
+ if object:IsA("\077\111\100\101\108") then mapWide.unindexModel(object) end
+ mapWide.unindexSpawn(object)
+end
+for _,object in ipairs(workspace:GetDescendants()) do
+ mapWide.indexObject(object)
+end
+connect(workspace.DescendantAdded,function(object)
+ mapWide.indexObject(object)
+end)
+connect(workspace.DescendantRemoving,function(object)
+ mapWide.removeObject(object)
+end)
+function mapWide.candidateSets(bucket,wanted,cache)
+ local wantedKey=mapWide.compact(wanted)
+ if wantedKey=="" then return {} end
+ local exact=bucket[wantedKey]
+ if exact then return {exact} end
+ local cached=cache[wantedKey]
+ if cached then return cached end
+ local sets={}
+ for key,set in pairs(bucket) do
+  if key:find(wantedKey,1,true) or wantedKey:find(key,1,true) then
+   table.insert(sets,set)
+  end
+ end
+ cache[wantedKey]=sets
+ return sets
+end
 function mapWide.nameMatches(model,wanted)
  if not model or not wanted then return false end
- local wantedNormal=mapWide.normalize(wanted)
- local wantedCompact=mapWide.compact(wanted)
- if wantedCompact=="" then return false end
- local function matches(value)
-  local normal=mapWide.normalize(value)
-  local compact=normal:gsub("\037\115\043","")
-  if compact==wantedCompact then return true end
-  if #wantedCompact>=4 and compact:find(wantedCompact,1,true) then return true end
-  if #compact>=4 and wantedCompact:find(compact,1,true) then return true end
-  return normal==wantedNormal
- end
- if matches(model.Name) then return true end
- for _,attribute in ipairs({"\078\080\067\078\097\109\101","\077\111\098\078\097\109\101","\068\105\115\112\108\097\121\078\097\109\101","\069\110\101\109\121\078\097\109\101","\078\097\109\101"}) do
-  local ok,value=pcall(function() return model:GetAttribute(attribute) end)
-  if ok and value~=nil and matches(value) then return true end
- end
- for _,desc in ipairs(model:GetDescendants()) do
-  if desc:IsA("\084\101\120\116\076\097\098\101\108") or desc:IsA("\084\101\120\116\066\117\116\116\111\110") then
-   local value=desc.Text
-   if value and value~="" and matches(value) then return true end
+ local wantedKey=mapWide.compact(wanted)
+ if wantedKey=="" then return false end
+ local keys=mapWide.modelKeys[model] or mapWide.keysFor(model)
+ for _,key in ipairs(keys) do
+  if key==wantedKey or key:find(wantedKey,1,true) or wantedKey:find(key,1,true) then
+   return true
   end
  end
  return false
 end
 local function targetParts(model)
- if not model or model==player.Character or not model:IsDescendantOf(workspace) then return end
  local wanted=questTargets[selectedQuest]
- if not wanted or not mapWide.nameMatches(model,wanted) then return end
- if not mapWide.alive(model) then return end
- return mapWide.root(model)
+ if not wanted or not mapWide.nameMatches(model,wanted) then return nil end
+ return mapWide.liveRoot(model)
 end
 local function register(object)
  if object:IsA("\072\117\109\097\110\111\105\100") and object.Parent and object.Parent:IsA("\077\111\100\101\108") then
@@ -739,39 +852,8 @@ connect(workspace.DescendantRemoving,function(object)
  npcModels[object]=nil
  if object:IsA("\072\117\109\097\110\111\105\100") and object.Parent then npcModels[object.Parent]=nil end
 end)
-function mapWide.indexObject(object)
- if object:IsA("\077\111\100\101\108") then
-  mapWide.models[object]=true
- elseif object:IsA("\065\116\116\097\099\104\109\101\110\116") or object:IsA("\066\097\115\101\080\097\114\116") then
-  local parent=object.Parent
-  if parent and parent.Name=="\104\111\115\116\105\108\101" then
-   mapWide.spawnMarkers[object]=true
-  elseif parent and parent.Parent and parent.Parent.Name=="\104\111\115\116\105\108\101" then
-   mapWide.spawnMarkers[object]=true
-  end
- end
-end
-function mapWide.removeObject(object)
- mapWide.models[object]=nil
- mapWide.spawnMarkers[object]=nil
-end
-function mapWide.rebuildIndex()
- table.clear(mapWide.models)
- table.clear(mapWide.spawnMarkers)
- for _,object in ipairs(workspace:GetDescendants()) do
-  mapWide.indexObject(object)
- end
- mapWide.lastFullScan=os.clock()
-end
-mapWide.rebuildIndex()
-connect(workspace.DescendantAdded,function(object)
- mapWide.indexObject(object)
-end)
-connect(workspace.DescendantRemoving,function(object)
- mapWide.removeObject(object)
-end)
 function mapWide.objectPosition(object)
- if not object then return nil end
+ if not object or not object:IsDescendantOf(workspace) then return nil end
  if object:IsA("\065\116\116\097\099\104\109\101\110\116") then return object.WorldPosition end
  if object:IsA("\066\097\115\101\080\097\114\116") then return object.Position end
  if object:IsA("\077\111\100\101\108") then
@@ -779,29 +861,11 @@ function mapWide.objectPosition(object)
   return rootPart and rootPart.Position or object:GetPivot().Position
  end
 end
-function mapWide.spawnMatches(object,wanted)
- if not object or not wanted then return false end
- local wantedCompact=mapWide.compact(wanted)
- if wantedCompact=="" then return false end
- local function check(value)
-  local compact=mapWide.compact(value)
-  return compact==wantedCompact
-   or (#wantedCompact>=4 and compact:find(wantedCompact,1,true)~=nil)
-   or (#compact>=4 and wantedCompact:find(compact,1,true)~=nil)
- end
- if check(object.Name) then return true end
- if object.Parent and check(object.Parent.Name) then return true end
- for _,attribute in ipairs({"\078\080\067\078\097\109\101","\077\111\098\078\097\109\101","\069\110\101\109\121\078\097\109\101","\068\105\115\112\108\097\121\078\097\109\101","\078\097\109\101"}) do
-  local ok,value=pcall(function() return object:GetAttribute(attribute) end)
-  if ok and value~=nil and check(value) then return true end
- end
- return false
-end
 function mapWide.findSpawn(wanted,origin)
  local bestPosition,bestDistance
  local maxDistanceSquared=mapWide.range*mapWide.range
- for object in pairs(mapWide.spawnMarkers) do
-  if object.Parent and object:IsDescendantOf(workspace) and mapWide.spawnMatches(object,wanted) then
+ for _,set in ipairs(mapWide.candidateSets(mapWide.spawnByName,wanted,mapWide.spawnCache)) do
+  for object in pairs(set) do
    local position=mapWide.objectPosition(object)
    if position then
     local delta=position-origin
@@ -811,21 +875,18 @@ function mapWide.findSpawn(wanted,origin)
      bestDistance=distanceSquared
     end
    end
-  else
-   mapWide.spawnMarkers[object]=nil
   end
  end
  return bestPosition
 end
 local function findNearest(position)
+ local wanted=questTargets[selectedQuest]
+ if not wanted then return nil end
  local best,bestDistance
  local maxDistanceSquared=mapWide.range*mapWide.range
- if os.clock()-mapWide.lastFullScan>=mapWide.fullScanInterval then
-  mapWide.rebuildIndex()
- end
- for object in pairs(mapWide.models) do
-  if object.Parent and object:IsDescendantOf(workspace) and object~=player.Character then
-   local part=targetParts(object)
+  for _,set in ipairs(mapWide.candidateSets(mapWide.byName,wanted,mapWide.fuzzyCache)) do
+  for object in pairs(set) do
+   local part=mapWide.liveRoot(object)
    if part then
     local delta=part.Position-position
     local distanceSquared=delta:Dot(delta)
@@ -834,8 +895,6 @@ local function findNearest(position)
      bestDistance=distanceSquared
     end
    end
-  else
-   mapWide.models[object]=nil
   end
  end
  return best
@@ -883,13 +942,13 @@ local function teleportNear(rootPart,position,offset)
 end
 home:Toggle("\065\117\116\111\032\081\117\101\115\116","\065\099\099\101\112\116\032\116\104\101\032\115\101\108\101\099\116\101\100\032\113\117\101\115\116\044\032\116\104\101\110\032\100\101\102\101\097\116\032\105\116\115\032\109\111\098\115\046",false,function(enabled)
  if dead then return end
- autoQuest=enabled; target=nil; scanElapsed=0.5
+ autoQuest=enabled; target=nil; scanElapsed=0.5; questReadyCache=false; questGateElapsed=questGateInterval
  questAcceptAttempts=0; questLastAccept=-100
  if not enabled then
   if controller then controller:Disconnect(); controller=nil end
   if stopAttack then stopAttack() end
   stopFlight(); setStatus("\079\102\102\032\226\128\162\032\070\108\105\103\104\116\032\115\116\111\112\112\101\100\046")
-  if autoLevel and bindings["\065\117\116\111\047\065\117\116\111\032\076\101\118\101\108"] then bindings["\065\117\116\111\047\065\117\116\111\032\076\101\118\101\108"].set(false) end
+    if autoLevel and bindings["\065\117\116\111\047\065\117\116\111\032\076\101\118\101\108"] then bindings["\065\117\116\111\047\065\117\116\111\032\076\101\118\101\108"].set(false) end
  else
   setStatus("\080\114\101\112\097\114\105\110\103\032"..selectedQuest.."\226\128\166")
   startController()
@@ -899,7 +958,7 @@ home:Toggle("\065\117\116\111\032\076\101\118\101\108","\068\101\116\101\099\116
  if dead then return end
  autoLevel=enabled
  table.clear(skippedQuests)
- target=nil; questAcceptAttempts=0; questLastAccept=-100
+ target=nil; questReadyCache=false; questGateElapsed=questGateInterval; questAcceptAttempts=0; questLastAccept=-100
  if enabled then
   setStatus("\065\117\116\111\032\076\101\118\101\108\032\226\128\162\032\068\101\116\101\099\116\105\110\103\032\121\111\117\114\032\108\101\118\101\108\032\097\110\100\032\099\104\111\111\115\105\110\103\032\116\104\101\032\098\101\115\116\032\113\117\101\115\116\226\128\166")
   if not autoQuest and bindings["\065\117\116\111\047\065\117\116\111\032\081\117\101\115\116"] then bindings["\065\117\116\111\047\065\117\116\111\032\081\117\101\115\116"].set(true) end
@@ -909,7 +968,7 @@ home:Slider("\070\108\121\032\115\112\101\101\100","\077\111\118\101\109\101\110
  flightSpeed=value
  if mover then mover.MaxVelocity=value end
 end)
-home:Paragraph("\065\117\116\111\032\081\117\101\115\116\032\099\111\109\098\097\116","\065\108\108\032\050\049\032\107\105\108\108\032\113\117\101\115\116\115\044\032\084\111\110\121\032\040\076\086\049\041\032\116\111\032\082\111\097\100\107\101\101\112\101\114\032\089\097\114\110\032\040\076\086\056\048\041\046\032\085\115\101\115\032\116\104\101\032\115\101\108\101\099\116\101\100\032\084\119\101\101\110\077\101\116\104\111\100\032\116\111\032\114\101\097\099\104\032\116\104\101\032\103\105\118\101\114\032\097\110\100\032\101\110\101\109\121\044\032\119\097\105\116\115\032\102\111\114\032\115\101\114\118\101\114\045\099\111\110\102\105\114\109\101\100\032\113\117\101\115\116\032\097\099\099\101\112\116\097\110\099\101\044\032\116\104\101\110\032\102\105\103\104\116\115\046\032\065\117\116\111\032\076\101\118\101\108\032\114\101\097\100\115\032\121\111\117\114\032\108\105\118\101\032\108\101\118\101\108\032\097\110\100\032\114\101\112\101\097\116\101\100\108\121\032\102\097\114\109\115\032\116\104\101\032\104\105\103\104\101\115\116\032\115\117\105\116\097\098\108\101\032\113\117\101\115\116\044\032\115\119\105\116\099\104\105\110\103\032\098\114\097\099\107\101\116\115\032\097\115\032\121\111\117\032\108\101\118\101\108\032\117\112\046\032\077\111\098\032\097\110\100\032\113\117\101\115\116\045\078\080\067\032\100\101\116\101\099\116\105\111\110\032\117\115\101\115\032\097\110\032\111\112\116\105\109\105\122\101\100\032\050\048\044\048\048\048\045\115\116\117\100\032\105\110\100\101\120\101\100\032\115\099\097\110\110\101\114\032\119\105\116\104\032\104\111\115\116\105\108\101\032\115\112\097\119\110\032\109\097\114\107\101\114\115\032\097\110\100\032\116\104\114\111\116\116\108\101\100\032\115\116\114\101\097\109\105\110\103\032\114\101\113\117\101\115\116\115\046")
+home:Paragraph("\065\117\116\111\032\081\117\101\115\116\032\099\111\109\098\097\116","\065\108\108\032\050\049\032\107\105\108\108\032\113\117\101\115\116\115\044\032\084\111\110\121\032\040\076\086\049\041\032\116\111\032\082\111\097\100\107\101\101\112\101\114\032\089\097\114\110\032\040\076\086\056\048\041\046\032\085\115\101\115\032\116\104\101\032\115\101\108\101\099\116\101\100\032\084\119\101\101\110\077\101\116\104\111\100\032\116\111\032\114\101\097\099\104\032\116\104\101\032\103\105\118\101\114\032\097\110\100\032\101\110\101\109\121\044\032\119\097\105\116\115\032\102\111\114\032\115\101\114\118\101\114\045\099\111\110\102\105\114\109\101\100\032\113\117\101\115\116\032\097\099\099\101\112\116\097\110\099\101\044\032\116\104\101\110\032\102\105\103\104\116\115\046\032\065\117\116\111\032\076\101\118\101\108\032\114\101\097\100\115\032\121\111\117\114\032\108\105\118\101\032\108\101\118\101\108\032\097\110\100\032\114\101\112\101\097\116\101\100\108\121\032\102\097\114\109\115\032\116\104\101\032\104\105\103\104\101\115\116\032\115\117\105\116\097\098\108\101\032\113\117\101\115\116\044\032\115\119\105\116\099\104\105\110\103\032\098\114\097\099\107\101\116\115\032\097\115\032\121\111\117\032\108\101\118\101\108\032\117\112\046\032\077\111\098\032\097\110\100\032\113\117\101\115\116\045\078\080\067\032\100\101\116\101\099\116\105\111\110\032\117\115\101\115\032\097\032\108\111\119\045\108\097\103\032\050\048\044\048\048\048\045\115\116\117\100\032\101\118\101\110\116\032\105\110\100\101\120\044\032\104\111\115\116\105\108\101\032\115\112\097\119\110\032\109\097\114\107\101\114\115\044\032\116\104\114\111\116\116\108\101\100\032\115\116\114\101\097\109\105\110\103\044\032\097\110\100\032\053\032\072\122\032\113\117\101\115\116\045\115\116\097\116\101\032\099\104\101\099\107\115\046")
 cleanupFlight=function()
  autoQuest=false; autoLevel=false
  if controller then controller:Disconnect(); controller=nil end
@@ -929,28 +988,34 @@ local function updateFlight(dt)
   stopFlight(); target=nil; setStatus("\087\097\105\116\105\110\103\032\102\111\114\032\121\111\117\114\032\099\104\097\114\097\099\116\101\114\226\128\166"); return
  end
  if not questGate then setStatus("\087\097\105\116\105\110\103\032\102\111\114\032\113\117\101\115\116\032\105\110\116\101\103\114\097\116\105\111\110\226\128\166"); return end
- local ok,ready=pcall(questGate,rootPart,humanoid)
- if not ok then
-  if stopAttack then stopAttack() end
-  stopFlight(); setStatus("\081\117\101\115\116\032\101\114\114\111\114\058\032"..tostring(ready)); return
+   questGateElapsed=questGateElapsed+dt
+ if questGateElapsed>=questGateInterval then
+  questGateElapsed=0
+  local ok,ready=pcall(questGate,rootPart,humanoid)
+  if not ok then
+   questReadyCache=false
+   if stopAttack then stopAttack() end
+   stopFlight(); setStatus("\081\117\101\115\116\032\101\114\114\111\114\058\032"..tostring(ready)); return
+  end
+  questReadyCache=ready==true
  end
- if not ready then return end
- local targetRoot=targetParts(target)
+ if not questReadyCache then return end
+   local targetRoot=mapWide.liveRoot(target)
  if not targetRoot then
   if stopAttack then stopAttack() end
   target=nil
   scanElapsed=scanElapsed+dt
-  if scanElapsed>=0.75 then
+  if scanElapsed>=1.0 then
    scanElapsed=0
-   target=findNearest(rootPart.Position)
+      target=findNearest(rootPart.Position)
    targetRoot=targetParts(target)
-   if not targetRoot then
+      if not targetRoot then
     local wanted=questTargets[selectedQuest]
     local spawnPosition=mapWide.findSpawn(wanted,rootPart.Position)
     if spawnPosition then
      mapWide.requestStream(spawnPosition)
-     target=findNearest(rootPart.Position)
-     targetRoot=targetParts(target)
+          target=findNearest(rootPart.Position)
+     targetRoot=mapWide.liveRoot(target)
      if not targetRoot then
       local spawnDistance=(spawnPosition-rootPart.Position).Magnitude
       if movementMethod=="\084\101\108\101\112\111\114\116" then
@@ -981,7 +1046,7 @@ local function updateFlight(dt)
   goal=teleportNear(rootPart,targetRoot.Position,Vector3.new(0,0,3))
  else
   if flightRoot~=rootPart or not mover then startFlight(rootPart,humanoid) end
-  goal=targetRoot.Position+Vector3.new(0,0,3)
+    goal=targetRoot.Position+Vector3.new(0,0,3)
   if (mover.Position-goal).Magnitude>0.1 then mover.Position=goal end
   local look=Vector3.new(targetRoot.Position.X,rootPart.Position.Y,targetRoot.Position.Z)
   if (look-rootPart.Position).Magnitude>0.1 then
@@ -1034,7 +1099,7 @@ local espFolder=new("\070\111\108\100\101\114",{Name="\077\111\109\111\110\103\0
 home:Section("\065\117\116\111\032\069\113\117\105\112")
 local lastReport
 local function report(message)
- message=tostring(message)
+  message=tostring(message)
  if message~=lastReport then
   lastReport=message
   if message:lower():find("\101\114\114\111\114",1,true) or message:lower():find("\117\110\097\118\097\105\108\097\098\108\101",1,true) then
@@ -1110,7 +1175,7 @@ local function selectedToolMatches(item)
  if not bridge.ready or not item then return false end
  local wanted=resolveToolID(item)
  if not wanted then return false end
- if bridge.combat and bridge.combat.selected_item_id==wanted then return true end
+  if bridge.combat and bridge.combat.selected_item_id==wanted then return true end
  local ok,selected=pcall(function()
   return bridge.user:get_player_selected_tool(player.UserId)
  end)
@@ -1130,7 +1195,7 @@ local function tryRemoteEquip(item)
   return false
  end
  local ok,err=pcall(function()
-  remote.Fire(numericToolID)
+    remote.Fire(numericToolID)
  end)
  if not ok then
   report("\069\113\117\105\112\032\101\114\114\111\114\058\032"..tostring(err))
@@ -1154,7 +1219,7 @@ local function equipSelected(force)
  equipGeneration=equipGeneration+1
  local generation=equipGeneration
  if not tryRemoteEquip(item) then return false end
- task.delay(0.22,function()
+   task.delay(0.22,function()
   if dead or generation~=equipGeneration then return end
   if not force and not autoEquip then return end
   if selectedToolMatches(item) then return end
@@ -1174,7 +1239,7 @@ local toolDropdown=home:Dropdown("\083\101\108\101\099\116\032\072\111\116\098\0
  end
  releaseAttack()
  lastEquip=0
- equipSelected(true)
+  equipSelected(true)
 end)
 home:Toggle("\065\117\116\111\032\069\113\117\105\112","\075\101\101\112\032\116\104\101\032\115\101\108\101\099\116\101\100\032\104\111\116\098\097\114\032\105\116\101\109\032\115\101\108\101\099\116\101\100\032\117\115\105\110\103\032\116\104\101\032\115\097\109\101\032\101\113\117\105\112\032\114\101\113\117\101\115\116\032\097\115\032\116\104\101\032\103\097\109\101\032\104\111\116\098\097\114\046",false,function(enabled)
  autoEquip=enabled
@@ -1182,7 +1247,7 @@ home:Toggle("\065\117\116\111\032\069\113\117\105\112","\075\101\101\112\032\116
  if enabled then equipSelected(true) end
 end)
 home:Button("\082\101\102\114\101\115\104\032\072\111\116\098\097\114","\070\111\114\099\101\032\097\032\102\114\101\115\104\032\115\099\097\110\032\111\102\032\101\118\101\114\121\032\105\116\101\109\032\099\117\114\114\101\110\116\108\121\032\097\115\115\105\103\110\101\100\032\116\111\032\121\111\117\114\032\104\111\116\098\097\114\032\097\110\100\032\114\101\098\117\105\108\100\032\116\104\101\032\100\114\111\112\100\111\119\110\046","\082\101\102\114\101\115\104",function()
- local current=selectedUID and currentItems[normalizeUID(selectedUID)] or labelsToItems[selectedLabel]
+  local current=selectedUID and currentItems[normalizeUID(selectedUID)] or labelsToItems[selectedLabel]
  if current then
   desiredUID=current.uid or selectedUID
   desiredItemID=current.id or desiredItemID
@@ -1217,7 +1282,7 @@ refreshTools=function()
    report("\087\097\105\116\105\110\103\032\102\111\114\032\105\110\118\101\110\116\111\114\121\032\100\097\116\097\226\128\166")
    return
   end
-  local byUID={}
+      local byUID={}
   for key,raw in pairs(inventory.container) do
    if type(raw)=="\116\097\098\108\101" then
     local uid=raw.uid
@@ -1227,7 +1292,7 @@ refreshTools=function()
     end
    end
   end
-  local items={}
+                local items={}
   local seenUID={}
   currentItems={}
   local function prepareItem(item,slot)
@@ -1241,7 +1306,7 @@ refreshTools=function()
    item.toolID=resolveToolID(item)
    return item
   end
-  for slot,hotbarUID in ipairs(inventory.hotbar_order or {}) do
+    for slot,hotbarUID in ipairs(inventory.hotbar_order or {}) do
    local uidKey=tostring(hotbarUID)
    local item=byUID[uidKey]
    if item then
@@ -1251,7 +1316,7 @@ refreshTools=function()
     seenUID[uidKey]=true
    end
   end
-  for uidKey,item in pairs(byUID) do
+        for uidKey,item in pairs(byUID) do
    local raw=item.raw
    if raw and raw.equipped==true and not seenUID[uidKey] then
     prepareItem(item,#items+1)
@@ -1260,7 +1325,7 @@ refreshTools=function()
     seenUID[uidKey]=true
    end
   end
-  for slot,hotbarUID in ipairs(inventory.hotbar_order or {}) do
+      for slot,hotbarUID in ipairs(inventory.hotbar_order or {}) do
    local uidKey=tostring(hotbarUID)
    if not seenUID[uidKey] then
     local placeholder={uid=hotbarUID,id=nil,raw=nil,slot=slot,displayName="\072\111\116\098\097\114\032\083\108\111\116\032"..tostring(slot),toolID=nil}
@@ -1302,13 +1367,13 @@ refreshTools=function()
 end
 local function giverPosition(questID,giverID)
  local quest=bridge.quests
- local model=quest:get_giver_model(giverID)
+  local model=quest:get_giver_model(giverID)
  if model and model.Parent then
   local rootPart=mapWide.root(model)
   if rootPart then return rootPart.Position end
   return model:GetPivot().Position
  end
- local spawns=workspace:FindFirstChild("\110\112\099\095\115\112\097\119\110\115")
+  local spawns=workspace:FindFirstChild("\110\112\099\095\115\112\097\119\110\115")
  local givers=spawns and spawns:FindFirstChild("\113\117\101\115\116\095\103\105\118\101\114")
  local marker=givers and givers:FindFirstChild(questID)
  if marker then
@@ -1319,7 +1384,7 @@ local function giverPosition(questID,giverID)
    return rootPart and rootPart.Position or marker:GetPivot().Position
   end
  end
- local selected=questDefinitions[selectedQuest]
+  local selected=questDefinitions[selectedQuest]
  local giverName=selected and selected.giverName
  local wanted={giverID,giverName,questID}
  local character=player.Character
@@ -1371,12 +1436,12 @@ end
 local function pickLevelQuest()
  local level=getCurrentLevel()
  local best,bestScore
- for pass=1,2 do
+   for pass=1,2 do
   for _,q in ipairs(questList) do
    local d=questDefinitions[q[1]]
    local inRange=(d.max==nil or level<=d.max)
    if d.min<=level and d.questID~="\099\097\114\097\118\097\110\095\100\101\102\101\110\115\101" and not skippedQuests[d.questID] and (pass==2 or inRange) then
-    local score=d.min*1000+(d.boss and 0 or 100)-d.index*0.001
+        local score=d.min*1000+(d.boss and 0 or 100)-d.index*0.001
     if not bestScore or score>bestScore then
      best=q[1]
      bestScore=score
@@ -1390,10 +1455,9 @@ end
 local function chooseQuest(label)
  if label==selectedQuest then return end
  selectedQuest=label
- target=nil; questAcceptAttempts=0; questLastAccept=-100
+ target=nil; questReadyCache=false; questGateElapsed=questGateInterval; questAcceptAttempts=0; questLastAccept=-100
  releaseAttack()
- if questDropdown then questDropdown:Set(label) end   -- dropdown callback ignores it: already selected
-end
+ if questDropdown then questDropdown:Set(label) end   end
 questGate=function(rootPart,humanoid)
  if not bridge.ready then
   releaseAttack(); stopFlight(); setStatus("\087\097\105\116\105\110\103\032\102\111\114\032\113\117\101\115\116\032\099\111\110\116\114\111\108\108\101\114\226\128\166"); return false
@@ -1404,7 +1468,7 @@ questGate=function(rootPart,humanoid)
   local assigned=quest:get_assigned_entry()
   local assignedLabel=assigned and labelByQuestID[assigned.id]
   if assignedLabel then
-   chooseQuest(assignedLabel)
+         chooseQuest(assignedLabel)
    local assignedDef=questDefinitions[assignedLabel]
    if assignedDef then
     setStatus("\065\117\116\111\032\076\101\118\101\108\032\226\128\162\032\076\086"..tostring(level).."\032\226\128\162\032\070\105\110\105\115\104\105\110\103\032"..assignedLabel.."\032\098\101\102\111\114\101\032\115\119\105\116\099\104\105\110\103\046")
@@ -1439,7 +1503,7 @@ questGate=function(rootPart,humanoid)
   end
   return true
  end
- local assigned=quest:get_assigned_entry()
+  local assigned=quest:get_assigned_entry()
  if assigned then
   releaseAttack(); stopFlight(); target=nil
   setStatus("\065\110\111\116\104\101\114\032\113\117\101\115\116\032\105\115\032\097\099\116\105\118\101\058\032"..tostring(assigned.id).."\046\032\070\105\110\105\115\104\032\105\116\032\102\105\114\115\116\046")
@@ -1459,7 +1523,7 @@ questGate=function(rootPart,humanoid)
  if questAcceptAttempts>=3 and os.clock()-questLastAccept>=5 then
   stopFlight()
   if autoLevel then
-   skippedQuests[QUEST_ID]=true; questAcceptAttempts=0; questLastAccept=-100
+      skippedQuests[QUEST_ID]=true; questAcceptAttempts=0; questLastAccept=-100
    setStatus("\065\117\116\111\032\076\101\118\101\108\032\226\128\162\032"..giverName.."\032\100\105\100\032\110\111\116\032\099\111\110\102\105\114\109\059\032\116\114\121\105\110\103\032\116\104\101\032\110\101\120\116\032\113\117\101\115\116\226\128\166")
   else
    setStatus(giverName.."\032\104\097\115\032\110\111\116\032\099\111\110\102\105\114\109\101\100\032\116\104\101\032\113\117\101\115\116\046\032\067\104\101\099\107\032\116\104\101\032\100\105\097\108\111\103\117\101\044\032\116\104\101\110\032\116\111\103\103\108\101\032\065\117\116\111\032\081\117\101\115\116\032\097\103\097\105\110\046")
@@ -1485,7 +1549,7 @@ questGate=function(rootPart,humanoid)
   setStatus("\065\099\099\101\112\116\105\110\103\032"..giverName.."\039\115\032\113\117\101\115\116\032\226\128\162\032\087\097\105\116\105\110\103\032\102\111\114\032\115\101\114\118\101\114\032\099\111\110\102\105\114\109\097\116\105\111\110\226\128\166"); return false
  end
  questLastAccept=os.clock(); questAcceptAttempts=questAcceptAttempts+1
- local handle
+   local handle
  for _,candidate in pairs(quest.handles or {}) do
   if candidate.giver_id==GIVER_ID and candidate.quest_id==QUEST_ID and candidate.model.Parent then handle=candidate; break end
  end
@@ -1500,7 +1564,7 @@ questGate=function(rootPart,humanoid)
   quest:open_dialogue(handle)
   quest:respond_to_dialogue("\097\099\099\101\112\116")
  else
-  bridge.remotes.quests.accept.Fire(QUEST_ID)
+    bridge.remotes.quests.accept.Fire(QUEST_ID)
  end
  setStatus("\065\099\099\101\112\116\105\110\103\032"..giverName.."\039\115\032\113\117\101\115\116\032\226\128\162\032\087\097\105\116\105\110\103\032\102\111\114\032\115\101\114\118\101\114\032\099\111\110\102\105\114\109\097\116\105\111\110\226\128\166")
  return false
@@ -1628,7 +1692,7 @@ function dodgeState.chargePercent()
    return math.clamp(charge,0,1)*100,controller
   end
  end
- local character=player.Character
+  local character=player.Character
  local humanoid=character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
  local charge=humanoid and humanoid:GetAttribute("\068\111\100\103\101\067\104\097\114\103\101")
  if type(charge)=="\110\117\109\098\101\114" then
@@ -1643,10 +1707,10 @@ function dodgeState.trigger(controller)
  if controller and type(controller.can_dodge)=="\102\117\110\099\116\105\111\110" and type(controller.dodge)=="\102\117\110\099\116\105\111\110" then
   local ok,can=pcall(function() return controller:can_dodge() end)
   if ok and can then
-   return pcall(function() controller:dodge() end)
+      return pcall(function() controller:dodge() end)
   end
  end
- local remote=bridge.remotes and bridge.remotes.combat and bridge.remotes.combat.request_dodge
+  local remote=bridge.remotes and bridge.remotes.combat and bridge.remotes.combat.request_dodge
  if remote and type(remote.Fire)=="\102\117\110\099\116\105\111\110" then
   return pcall(function() remote.Fire() end)
  end
@@ -1694,7 +1758,7 @@ local statIndex=0
 local lastStatClick=0
 local lastStatScan={}
 local function setStatStatus(_message)
-end
+ end
 local function normalized(value)
  return tostring(value or ""):lower():gsub("\091\094\037\119\093","")
 end
@@ -1888,7 +1952,7 @@ local function refreshDestinations()
    if humanoid and humanoid.Health>0 then add(model,model.Name,"\076\105\118\101\032\078\080\067") end
   end
  end
- for _,folderName in ipairs({"\110\112\099\095\109\097\114\107\101\114\115","\113\117\101\115\116\095\110\112\099\115"}) do
+  for _,folderName in ipairs({"\110\112\099\095\109\097\114\107\101\114\115","\113\117\101\115\116\095\110\112\099\115"}) do
   local folder=workspace:FindFirstChild(folderName)
   if folder then
    for _,object in ipairs(folder:GetDescendants()) do
@@ -2030,12 +2094,12 @@ settings:Paragraph("\077\111\118\101\109\101\110\116\032\098\101\104\097\118\105
 resetAllSettings=function()
  if dead then return end
  restoring=true
- for key,binding in pairs(bindings) do
+  for key,binding in pairs(bindings) do
   if binding and binding.default~=nil then
    pcall(binding.set,binding.default)
   end
  end
- desiredUID=nil
+  desiredUID=nil
  desiredItemID=nil
  selectedUID=nil
  selectedLabel=nil
@@ -2047,10 +2111,10 @@ resetAllSettings=function()
  preferences["\084\101\108\101\112\111\114\116\047\083\101\108\101\099\116\032\078\080\067"]=nil
  restoring=false
  table.clear(touched)
- window.Position=UDim2.fromScale(0.5,0.5)
+  window.Position=UDim2.fromScale(0.5,0.5)
  visible(true)
  if home then home:Select() end
- task.defer(function()
+  task.defer(function()
   if dead then return end
   refreshTools()
   refreshDestinations()
@@ -2110,7 +2174,7 @@ task.spawn(function()
   if dead then return end
   if ok and type(data)=="\116\097\098\108\101" then
    saveRemote=set
-   if not sessionJSON then restorePreferences(data) end
+      if not sessionJSON then restorePreferences(data) end
    setSaveMessage("\065\117\116\111\032\083\097\118\101\032\099\111\110\110\101\099\116\101\100\032\226\128\162\032\099\104\097\110\103\101\115\032\115\097\118\101\032\097\099\114\111\115\115\032\115\101\115\115\105\111\110\115")
    task.delay(1,function() if not dead then flushPreferences() end end)
    return
