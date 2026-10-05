@@ -1653,6 +1653,7 @@ task.spawn(function()
   updateESP()
  end
 end)
+do
 local dodgeState={enabled=false,lastAttempt=0,statusLabel=nil,lastText=nil}
 autoDodgeTab:Section("\065\117\116\111\032\068\111\100\103\101")
 local dodgeStatus=autoDodgeTab:Paragraph("\068\111\100\103\101\032\115\116\097\116\117\115","\079\102\102\032\226\128\162\032\087\097\105\116\105\110\103\032\102\111\114\032\068\111\100\103\101\067\104\097\114\103\101\046")
@@ -1743,6 +1744,8 @@ task.spawn(function()
   end
  end
 end)
+end
+do
 local autoStat=false
 local selectedStats={}
 local statOrder={"\083\116\114\101\110\103\116\104","\083\116\097\109\105\110\097","\071\117\110\032\080\111\119\101\114","\083\119\111\114\100","\072\101\097\108\116\104"}
@@ -1885,6 +1888,7 @@ task.spawn(function()
   end
  end
 end)
+end
 teleport:Section("\078\080\067\032\084\101\108\101\112\111\114\116")
 local teleportEntries={}
 local selectedDestination
@@ -1999,6 +2003,7 @@ connect(teleport.Page:GetPropertyChangedSignal("\086\105\115\105\098\108\101"),f
  if teleport.Page.Visible then refreshDestinations() end
 end)
 refreshDestinations()
+do
 settings:Section("\082\101\100\101\101\109\032\067\111\100\101\115")
 local codeInput
 local submitCode
@@ -2059,6 +2064,7 @@ submitCode=function()
  end)
 end
 settings:Button("\082\101\100\101\101\109\032\067\111\100\101","\083\104\111\119\115\032\116\104\101\032\103\097\109\101\039\115\032\097\099\116\117\097\108\032\114\101\100\101\109\112\116\105\111\110\032\114\101\115\117\108\116\046","\082\101\100\101\101\109",submitCode)
+end
 settings:Section("\078\080\067\032\069\083\080")
 settings:Toggle("\078\080\067\032\069\083\080","\078\097\109\101\044\032\072\080\032\097\110\100\032\100\105\115\116\097\110\099\101\032\102\111\114\032\110\101\097\114\098\121\032\108\105\118\105\110\103\032\078\080\067\115\046",false,function(enabled)
  espEnabled=enabled
