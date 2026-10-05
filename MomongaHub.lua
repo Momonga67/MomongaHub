@@ -1,96 +1,42 @@
---========================================================
--- MOMONGAHUB UNIVERSAL LOADER
---========================================================
-
-if getgenv().MomongaHubLoaderRunning then
-	warn("[MomongaHub] Loader already ran. Stopping duplicate execution.")
-	return
+-- MomongaHub central game loader
+if not game:IsLoaded() then
+    game.Loaded:Wait()
 end
 
-getgenv().MomongaHubLoaderRunning = true
+local PLACE_OR_GAME_ID = 93934100402512
 
-local PLACE_ID = game.PlaceId
-local GAME_ID = game.GameId
-
-print("====================================")
-print("[MomongaHub] LOADER STARTED")
-print("[MomongaHub] PlaceId =", PLACE_ID)
-print("[MomongaHub] GameId =", GAME_ID)
-print("====================================")
-
-local Games = {
-	[92163766632239] = {
-		Name = "Anime World Capsule",
-		File = "AnimeWorldCapsule.lua"
-	},
-
-	[111097829542198] = {
-		Name = "Legacy Piece",
-		File = "LegacyPiece.lua"
-	}
+local Routes = {
+   
+    [92163766632239] = "https://raw.githubusercontent.com/Momonga67/MomongaHub/refs/heads/main/AnimeWorldCapsule.lua",
+    [111097829542198] = "https://raw.githubusercontent.com/Momonga67/MomongaHub/refs/heads/main/LegacyPiece.lua",
+    [93934100402512] = "https://raw.githubusercontent.com/Momonga67/MomongaHub/refs/heads/main/CloverTime.lua",
 }
 
-local selected = Games[PLACE_ID]
+local id = game.PlaceId
+local url = Routes[id]
 
-if not selected then
-	warn("[MomongaHub] UNSUPPORTED PLACE")
-	warn("[MomongaHub] PlaceId: " .. tostring(PLACE_ID))
-
-	getgenv().MomongaHubLoaderRunning = nil
-	return
+if not url then
+    id = game.GameId
+    url = Routes[id]
 end
 
-print("[MomongaHub] Selected ONLY:")
-print("[MomongaHub] " .. selected.Name)
-print("[MomongaHub] File: " .. selected.File)
+if not url then
+    warn("[MomongaHub] Unsupported game. PlaceId=" .. tostring(game.PlaceId) ..
+         " GameId=" .. tostring(game.GameId))
+    return
+end
 
-local URL =
-	"https://raw.githubusercontent.com/Momonga67/MomongaHub/main/"
-	.. selected.File
-	.. "?v="
-	.. tostring(os.time())
-
-local success, result = pcall(function()
-
-	print("[MomongaHub] Downloading:")
-	print(URL)
-
-	local source = game:HttpGet(URL)
-
-	if not source or #source == 0 then
-		error("Downloaded file is empty")
-	end
-
-	print(
-		"[MomongaHub] Download successful. Size:",
-		#source
-	)
-
-	local fn, compileError = loadstring(source)
-
-	if not fn then
-		error(
-			"Compilation error: "
-			.. tostring(compileError)
-		)
-	end
-
-	print(
-		"[MomongaHub] Executing ONLY "
-		.. selected.File
-	)
-
-	fn()
+local ok, source = pcall(function()
+    return game:HttpGet(url)
 end)
 
-getgenv().MomongaHubLoaderRunning = nil
-
-if not success then
-	warn("[MomongaHub] LOAD FAILED:")
-	warn(result)
-else
-	print(
-		"[MomongaHub] Finished loading "
-		.. selected.Name
-	)
+if not ok then
+    error("[MomongaHub] Failed to download game script: " .. tostring(source))
 end
+
+local chunk, compileError = loadstring(source)
+if not chunk then
+    error("[MomongaHub] Failed to compile game script: " .. tostring(compileError))
+end
+
+return chunk()
