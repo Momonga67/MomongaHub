@@ -10,6 +10,7 @@ local Routes = {
     [92163766632239] = "https://raw.githubusercontent.com/Momonga67/MomongaHub/refs/heads/main/AnimeWorldCapsule.lua",
     [111097829542198] = "https://raw.githubusercontent.com/Momonga67/MomongaHub/refs/heads/main/LegacyPiece.lua",
     [93934100402512] = "https://raw.githubusercontent.com/Momonga67/MomongaHub/refs/heads/main/CloverTime.lua",
+    [90920025162454] = "https://raw.githubusercontent.com/Momonga67/MomongaHub/refs/heads/main/RollAFisherman.lua",
 }
 
 local id = game.PlaceId
